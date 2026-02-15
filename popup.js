@@ -1,197 +1,198 @@
-document.addEventListener('DOMContentLoaded', () => {
-  console.log('Popup loaded at', new Date().toISOString());
-  
-  const archiveButton = document.getElementById('archiveButton');
-  const selectUserButton = document.getElementById('selectUserButton');
-  const selectAssistantButton = document.getElementById('selectAssistantButton');
-  const resetButton = document.getElementById('resetButton');
+// =============================================================================
+// Chat Archive — Popup Script (Phase 2)
+// =============================================================================
 
-  if (!archiveButton || !selectUserButton || !selectAssistantButton) {
-    console.error('One or more buttons not found.');
-    alert('Error: Missing buttons in popup');
-    return;
-  }
+const statusEl = document.getElementById('status');
+const exportBtn = document.getElementById('exportBtn');
+const resultsEl = document.getElementById('results');
+const formatBtns = document.querySelectorAll('.format-btn');
 
-  // On load, check selection state and update buttons
-  chrome.storage.local.get(['userSelected', 'assistantSelected'], (result) => {
-    if (result.userSelected) {
-      selectUserButton.disabled = true;
-      selectUserButton.style.backgroundColor = '#ccc';
-      selectUserButton.style.cursor = 'not-allowed';
-    }
-    if (result.assistantSelected) {
-      selectAssistantButton.disabled = true;
-      selectAssistantButton.style.backgroundColor = '#ccc';
-      selectAssistantButton.style.cursor = 'not-allowed';
-    }
-  });
+const PLATFORM_DISPLAY = {
+  claude: 'Claude.ai',
+  chatgpt: 'ChatGPT',
+  gemini: 'Gemini',
+  grok: 'Grok',
+  'grok-x': 'Grok (x.com)',
+};
 
-  // Selection button handlers
-  selectUserButton.addEventListener('click', () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0]) {
-        console.error('No active tab found');
-        return;
-      }
-      console.log('Sending startSelect message for user');
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'startSelect', role: 'user' }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error('Error sending startSelect message:', chrome.runtime.lastError);
-        } else {
-          console.log('StartSelect response:', response);
-        }
-      });
-    });
-  });
+let currentTabId = null;
+let detectedPlatform = null;
+let selectedFormat = 'json';
 
-  selectAssistantButton.addEventListener('click', () => {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0]) {
-        console.error('No active tab found');
-        return;
-      }
-      console.log('Sending startSelect message for assistant');
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'startSelect', role: 'assistant' }, (response) => {
-        if (chrome.runtime.lastError) {
-          console.error('Error sending startSelect message:', chrome.runtime.lastError);
-        } else {
-          console.log('StartSelect response:', response);
-        }
-      });
-    });
-  });
-
-  // Archive button with improved error handling and timeout
-  archiveButton.addEventListener('click', () => {
-    console.log('Archive button clicked at', new Date().toISOString());
-    
-    // Disable button to prevent multiple clicks
-    archiveButton.disabled = true;
-    archiveButton.textContent = 'Processing...';
-    
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0]) {
-        console.error('No active tab found');
-        alert('Error: No active tab found');
-        resetArchiveButton();
-        return;
-      }
-      
-      console.log('Sending archiveChat message to tab:', tabs[0].id);
-      
-      // Set up timeout for the message
-      let responseReceived = false;
-      const messageTimeout = setTimeout(() => {
-        if (!responseReceived) {
-          console.error('Message timeout - no response received within 15 seconds');
-          alert('Operation timed out. Please try again.');
-          resetArchiveButton();
-        }
-      }, 15000); // 15 second timeout
-      
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'archiveChat' }, (response) => {
-        responseReceived = true;
-        clearTimeout(messageTimeout);
-        
-        console.log('Archive response received:', response);
-        
-        if (chrome.runtime.lastError) {
-          console.error('Chrome runtime error:', chrome.runtime.lastError);
-          alert('Error: ' + chrome.runtime.lastError.message);
-          resetArchiveButton();
-          return;
-        }
-        
-        if (!response) {
-          console.error('No response received from content script');
-          alert('Error: No response from content script. Make sure you\'re on a chat page.');
-          resetArchiveButton();
-          return;
-        }
-        
-        if (response.error) {
-          console.error('Content script error:', response.error);
-          alert('Error: ' + response.error);
-          resetArchiveButton();
-          return;
-        }
-        
-        if (response.data) {
-          console.log('Successfully received chat data:', response.data);
-          
-          try {
-            const jsonString = JSON.stringify(response.data, null, 2);
-            const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonString);
-            
-            chrome.downloads.download({
-              url: dataUrl,
-              filename: `chat_archive_${Date.now()}.json`,
-              saveAs: true
-            }, (downloadId) => {
-              if (chrome.runtime.lastError) {
-                console.error('Download error:', chrome.runtime.lastError);
-                alert('Error downloading file: ' + chrome.runtime.lastError.message);
-              } else {
-                console.log('Download started with ID:', downloadId);
-                alert('Chat archived successfully!');
-              }
-              resetArchiveButton();
-            });
-          } catch (e) {
-            console.error('Error processing chat data:', e);
-            alert('Error processing chat data: ' + e.message);
-            resetArchiveButton();
-          }
-        } else {
-          console.error('No data in response:', response);
-          alert('No chat data found. Ensure you\'re on a chat page with messages.');
-          resetArchiveButton();
-        }
-      });
-    });
-  });
-
-  function resetArchiveButton() {
-    archiveButton.disabled = false;
-    archiveButton.textContent = 'Archive to JSON';
-  }
-
-  // Reset button handler
-  if (resetButton) {
-    resetButton.addEventListener('click', () => {
-      chrome.storage.local.remove(['userSelected', 'assistantSelected', 'userSelector', 'assistantSelector', 'userBgColor'], () => {
-        selectUserButton.disabled = false;
-        selectUserButton.style.backgroundColor = '';
-        selectUserButton.style.cursor = 'pointer';
-        selectAssistantButton.disabled = false;
-        selectAssistantButton.style.backgroundColor = '';
-        selectAssistantButton.style.cursor = 'pointer';
-        console.log('Selections have been reset');
-        alert('Selections have been reset.');
-      });
-    });
-  }
-
-  // Listen for selection confirmation from content script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('Received message in popup.js:', message);
-    
-    if (message.action === 'elementSelected' && message.role) {
-      console.log(`Disabling button for role: ${message.role}`);
-      
-      if (message.role === 'user') {
-        selectUserButton.disabled = true;
-        selectUserButton.style.backgroundColor = '#ccc';
-        selectUserButton.style.cursor = 'not-allowed';
-        console.log('User button disabled and greyed out');
-      } else if (message.role === 'assistant') {
-        selectAssistantButton.disabled = true;
-        selectAssistantButton.style.backgroundColor = '#ccc';
-        selectAssistantButton.style.cursor = 'not-allowed';
-        console.log('Assistant button disabled and greyed out');
-      }
-      
-      sendResponse({ status: 'received' });
-    }
+// --- Format selector ---
+formatBtns.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    formatBtns.forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedFormat = btn.dataset.format;
+    updateExportButtonLabel();
   });
 });
+
+function updateExportButtonLabel() {
+  const labels = {
+    json: 'Export JSON',
+    markdown: 'Export Markdown',
+    both: 'Export Both',
+  };
+  exportBtn.textContent = labels[selectedFormat] || 'Export';
+}
+
+// --- Initialization ---
+async function init() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab) {
+      showStatus('error', 'No active tab found.');
+      return;
+    }
+    currentTabId = tab.id;
+
+    const url = tab.url || '';
+    const supportedDomains = [
+      'claude.ai/chat',
+      'chat.openai.com',
+      'chatgpt.com',
+      'gemini.google.com',
+      'x.com/i/grok',
+      'grok.com',
+    ];
+
+    const isSupported = supportedDomains.some((d) => url.includes(d));
+    if (!isSupported) {
+      showStatus('error', 'Navigate to a supported AI chat to export.');
+      return;
+    }
+
+    try {
+      const response = await sendToTab(currentTabId, { action: 'detect' });
+      if (response && response.supported) {
+        detectedPlatform = response.platform;
+        const name = PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform;
+        showStatus(
+          'info',
+          `Detected: <span class="platform-name">${name}</span>. Ready to export.`
+        );
+        exportBtn.disabled = false;
+        updateExportButtonLabel();
+      } else {
+        showStatus(
+          'warning',
+          'On a supported site, but content script not responding. Try refreshing the page.'
+        );
+      }
+    } catch (err) {
+      showStatus('warning', 'Content script not loaded. Try refreshing the page.');
+    }
+  } catch (err) {
+    showStatus('error', `Error: ${err.message}`);
+  }
+}
+
+// --- Export ---
+exportBtn.addEventListener('click', async () => {
+  if (!currentTabId || !detectedPlatform) return;
+
+  exportBtn.disabled = true;
+  exportBtn.innerHTML = '<span class="spinner"></span> Extracting...';
+  showStatus('info', 'Extracting conversation...');
+  resultsEl.classList.remove('visible');
+
+  try {
+    const response = await sendToTab(currentTabId, {
+      action: 'extract',
+      options: { format: selectedFormat },
+    });
+
+    if (response && response.success) {
+      const meta = response.metadata || {};
+      const formatLabel =
+        meta.formats_exported?.join(' + ').toUpperCase() ||
+        selectedFormat.toUpperCase();
+      showStatus(
+        'success',
+        `Exported ${meta.total_turns || '?'} turns as ${formatLabel} from ${
+          PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform
+        }.`
+      );
+      showResults(meta, response.integrityWarnings);
+    } else {
+      showStatus('error', response?.error || 'Export failed.');
+      if (response?.errors?.length) {
+        showResults({ errors: response.errors }, []);
+      }
+    }
+  } catch (err) {
+    showStatus('error', `Export failed: ${err.message}`);
+  }
+
+  exportBtn.disabled = false;
+  updateExportButtonLabel();
+});
+
+// --- UI Helpers ---
+function showStatus(type, html) {
+  statusEl.className = `status ${type}`;
+  statusEl.innerHTML = html;
+}
+
+function showResults(metadata, warnings) {
+  let html = '';
+
+  if (metadata.total_turns !== undefined) {
+    html += `<div class="stat"><span class="stat-label">Turns</span><span class="stat-value">${metadata.total_turns}</span></div>`;
+  }
+  if (metadata.flagged_turns !== undefined && metadata.flagged_turns > 0) {
+    html += `<div class="stat"><span class="stat-label">Flagged</span><span class="stat-value">${metadata.flagged_turns}</span></div>`;
+  }
+  if (metadata.extraction_time_ms !== undefined) {
+    html += `<div class="stat"><span class="stat-label">Time</span><span class="stat-value">${metadata.extraction_time_ms}ms</span></div>`;
+  }
+  if (metadata.partial_export) {
+    html += `<div class="stat"><span class="stat-label">Status</span><span class="stat-value" style="color:#b45309">Partial</span></div>`;
+  }
+  if (metadata.formats_exported) {
+    html += `<div class="stat"><span class="stat-label">Formats</span><span class="stat-value">${metadata.formats_exported.join(', ')}</span></div>`;
+  }
+
+  if (warnings && warnings.length > 0) {
+    html += '<div class="warnings">';
+    warnings.forEach((w) => {
+      html += `<div>⚠ ${escapeHtml(w)}</div>`;
+    });
+    html += '</div>';
+  }
+
+  if (metadata.errors && metadata.errors.length > 0) {
+    html += '<div class="warnings">';
+    metadata.errors.forEach((e) => {
+      html += `<div>⚠ ${escapeHtml(e)}</div>`;
+    });
+    html += '</div>';
+  }
+
+  if (html) {
+    resultsEl.innerHTML = html;
+    resultsEl.classList.add('visible');
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function sendToTab(tabId, message) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+init();

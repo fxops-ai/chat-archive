@@ -1,55 +1,175 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>GPT2JSON</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=320">
+  <title>Chat Archive</title>
   <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
-      width: 200px;
-      padding: 10px;
-      font-family: Arial;
-      background: linear-gradient(135deg, #0074D9 0%, #7FDBFF 100%);
-      border-radius: 20px;
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 14px;
+      color: #1a1a1a;
+      background: #fff;
     }
-      button {
-        width: 100%;
-        padding: 10px;
-        border-radius: 20px;
-        background-color: #0074D9;
-        color: #fff;
-        border: none;
-        cursor: pointer;
-      }
-      .selector {
-        margin-bottom: 10px;
-        background-color: #2ECC40;
-      }
-      .reset {
-        margin-top: 10px;
-        background-color: #FF4136;
-      }
-      h2 { 
-        text-align: center; 
-        font-size: 1.2em; 
-        margin-bottom: 10px; 
-        color:#fff
-      }
+
+    .header {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .header h1 .icon { font-size: 18px; }
+    .header .subtitle { font-size: 11px; color: #888; margin-top: 2px; }
+
+    .content { padding: 16px; }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .status.info { background: #f0f4ff; color: #3b5998; }
+    .status.success { background: #f0faf0; color: #2d7a3a; }
+    .status.error { background: #fff0f0; color: #c53030; }
+    .status.warning { background: #fffbf0; color: #b45309; }
+    .status .platform-name { font-weight: 600; }
+
+    /* Format selector */
+    .format-group {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .format-btn {
+      flex: 1;
+      padding: 7px 0;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+
+    .format-btn:hover { border-color: #999; color: #333; }
+    .format-btn.active {
+      border-color: #1a1a1a;
+      background: #1a1a1a;
+      color: #fff;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #1a1a1a; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #333; }
+    .btn-primary:active:not(:disabled) { background: #000; }
+
+    .results {
+      margin-top: 12px;
+      padding: 10px 12px;
+      background: #fafafa;
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.5;
+      display: none;
+    }
+
+    .results.visible { display: block; }
+
+    .results .stat {
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .results .stat-label { color: #666; }
+    .results .stat-value { font-weight: 500; }
+
+    .results .warnings {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid #e5e5e5;
+      color: #b45309;
+    }
+
+    .footer {
+      padding: 8px 16px 12px;
+      border-top: 1px solid #e5e5e5;
+      text-align: center;
+    }
+
+    .footer .privacy { font-size: 10px; color: #999; }
+    .footer .privacy .lock { font-size: 11px; }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-  <h2>Hi there! Let's do this</h2>
-  <div>
-    <button id="selectUserButton" class="selector">Select a User Message to ID</button>
+  <div class="header">
+    <h1><span class="icon">📦</span> Chat Archive</h1>
+    <div class="subtitle">Export AI conversations to JSON &amp; Markdown</div>
   </div>
-  <div>
-    <button id="selectAssistantButton" class="selector">Select an Assistant Message to ID</button>
+
+  <div class="content">
+    <div id="status" class="status info">
+      Detecting platform...
+    </div>
+
+    <div class="format-group">
+      <button class="format-btn active" data-format="json">JSON</button>
+      <button class="format-btn" data-format="markdown">Markdown</button>
+      <button class="format-btn" data-format="both">Both</button>
+    </div>
+
+    <button id="exportBtn" class="btn btn-primary" disabled>
+      Export
+    </button>
+
+    <div id="results" class="results"></div>
   </div>
-  <div>
-    <button id="resetButton" class="reset">Reset Selection</button>
+
+  <div class="footer">
+    <div class="privacy"><span class="lock">🔒</span> No data leaves your browser</div>
   </div>
-  <hr
-  <div>
-    <button id="archiveButton">Archive to JSON</button>
-  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>

@@ -1,39 +1,44 @@
-console.log('Background script loaded at', new Date().toISOString());
+// =============================================================================
+// Chat Archive — Background Service Worker
+// =============================================================================
+// Handles file downloads (content scripts can't use chrome.downloads directly).
+// Zero network requests. No telemetry. No phone-home.
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log('Background received message:', request.action, 'at', new Date().toISOString());
-  
-  try {
-    if (request.action === 'saveJson') {
-      console.log('Save JSON request received:', request.data);
-      sendResponse({ status: 'success' });
-      return false; // Synchronous response
-      
-    } else if (request.action === 'elementSelected') {
-      // Store selection state in chrome.storage
-      const key = request.role === 'user' ? 'userSelected' : 'assistantSelected';
-      chrome.storage.local.set({ [key]: true }, () => {
-        console.log(`Selection state saved: ${key}`);
-        try {
-          sendResponse({ status: 'stored' });
-        } catch (e) {
-          console.error('Error sending response:', e);
-        }
-      });
-      return true; // Async response for storage operation
-      
-    } else {
-      console.log('Unknown action:', request.action);
-      sendResponse({ status: 'error', message: 'Unknown action' });
-      return false; // Synchronous response
-    }
-  } catch (error) {
-    console.error('Error in background message handler:', error);
-    try {
-      sendResponse({ status: 'error', message: error.message });
-    } catch (e) {
-      console.error('Failed to send error response:', e);
-    }
-    return false;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'download') {
+    handleDownload(message)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === 'getTabInfo') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        sendResponse({ url: tabs[0].url, id: tabs[0].id });
+      } else {
+        sendResponse({ url: null, id: null });
+      }
+    });
+    return true;
   }
 });
+
+async function handleDownload({ content, filename, mimeType }) {
+  try {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+
+    const downloadId = await chrome.downloads.download({
+      url,
+      filename,
+      saveAs: true,
+    });
+
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+
+    return { success: true, downloadId };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
