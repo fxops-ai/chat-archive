@@ -26,15 +26,15 @@ Acknowledgement and thanks to Jerren@trifall.com for hinting at use of gpt icon 
 1. **Download or clone this repository**
    ```bash
    git clone https://github.com/fxops-ai/chat-archive.git
-   cd gpt2json-extension
-   git checkout v2-archive-extraction
+   cd chat-archive
+   git checkout chat-archive
    ```
 
 2. **Load in Chrome** (or Edge, Brave, Vivaldi, Arc, Opera)
    - Open `chrome://extensions/`
    - Enable **"Developer mode"** (toggle in top-right)
    - Click **"Load unpacked"**
-   - Select the `gpt2json-extension` folder
+   - Select the `chat-archive` folder
    - Extension icon appears in toolbar
 
 ### Usage
@@ -241,7 +241,7 @@ chmod +x build.sh
 ### Project Structure
 
 ```
-gpt2json-extension/
+chat-archive/
 ├── manifest.json           # Chrome extension manifest
 ├── background.js           # Service worker (handles downloads)
 ├── popup.html/js           # Extension popup UI
