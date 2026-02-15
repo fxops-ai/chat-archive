@@ -25,7 +25,7 @@ Acknowledgement and thanks to Jerren@trifall.com for hinting at use of gpt icon 
 
 1. **Download or clone this repository**
    ```bash
-   git clone https://github.com/fxops-ai/gpt2json-extension.git
+   git clone https://github.com/fxops-ai/chat-archive.git
    cd gpt2json-extension
    git checkout v2-archive-extraction
    ```
@@ -363,7 +363,7 @@ When platforms update their UI and extraction breaks:
 
 [Choose your license - MIT, Apache 2.0, GPL, etc.]
 
-This project is licensed under the [LICENSE NAME] License - see the LICENSE file for details.
+This project is licensed under the  License - see the LICENSE file for details.
 
 ---
 
@@ -377,8 +377,8 @@ This project is licensed under the [LICENSE NAME] License - see the LICENSE file
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/fxops-ai/gpt2json-extension/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/fxops-ai/gpt2json-extension/discussions)
+- **Issues**: [GitHub Issues](https://github.com/fxops-ai/chat-archive/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/fxops-ai/chat-archive/discussions)
 - **Email**: [john@fxops.ai]
 
 ---
