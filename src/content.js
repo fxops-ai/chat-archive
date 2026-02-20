@@ -1,12 +1,10 @@
 // =============================================================================
-// Chat Archive — Content Script (Orchestrator)
+// Chat Archive — Content Script
 // =============================================================================
-// Injected into AI chat platform pages. Orchestrates:
-//   Pass 0: Platform-specific button extraction (clipboard)
-//   Pass 1: Structural heuristics (fallback for uncertain turns)
-//   Serialization: JSON + Markdown
-//   Download: via Chrome API or blob fallback
+// Injected into AI chat platform pages. Orchestrates extraction pipeline.
+// Phase 1: Claude.ai only, direct text extraction, JSON + Markdown export.
 
+// Listen for messages from the popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'detect') {
     const platform = detectPlatform();
@@ -18,7 +16,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleExtraction(message.options || {})
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
+    return true; // Keep channel open for async
   }
 
   if (message.action === 'ping') {
@@ -29,10 +27,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 /**
  * Main extraction pipeline.
- * 1. Platform-specific Pass 0 extraction (clipboard + direct text)
- * 2. Pass 1 heuristics on any uncertain turns
- * 3. Serialize to requested format(s)
- * 4. Download
  */
 async function handleExtraction(options) {
   const platform = detectPlatform();
@@ -40,31 +34,22 @@ async function handleExtraction(options) {
     return { success: false, error: 'Not on a supported chat platform' };
   }
 
-  const format = options.format || 'json'; // 'json', 'markdown', 'both'
-  console.log(`[Chat Archive] Starting extraction: platform=${platform}, format=${format}`);
+  const format = options.format || 'json'; // 'json' | 'markdown'
+  console.log(`[Chat Archive] Starting extraction for platform: ${platform}, format: ${format}`);
   const startTime = Date.now();
 
-  // --- Pass 0: Platform-specific extraction ---
   let extraction;
+
   try {
     switch (platform) {
       case 'claude':
         extraction = await extractClaudeConversation();
         break;
-      case 'chatgpt':
-        extraction = await extractChatGPTConversation();
-        break;
-      case 'gemini':
-        extraction = await extractGeminiConversation();
-        break;
-      case 'grok':
-        extraction = await extractGrokConversation();
-        break;
-      case 'grok-x':
-        extraction = await extractGrokXConversation();
-        break;
       default:
-        return { success: false, error: `Unknown platform: ${platform}` };
+        return {
+          success: false,
+          error: `Platform "${platform}" extraction not yet implemented. Coming in Phase 2.`,
+        };
     }
   } catch (err) {
     console.error('[Chat Archive] Extraction failed:', err);
@@ -79,57 +64,44 @@ async function handleExtraction(options) {
     };
   }
 
-  // --- Pass 1: Heuristics for uncertain turns ---
+  let content, filename, mimeType, metadata, integrityWarnings;
+
+  if (format === 'markdown') {
+    const result = serializeToMarkdown(extraction, platform);
+    content = result.markdown;
+    metadata = result.metadata;
+    integrityWarnings = result.integrityWarnings;
+    filename = generateFilename(platform, 'md');
+    mimeType = 'text/markdown';
+  } else {
+    const result = serializeToJSON(extraction, platform);
+    content = result.json;
+    metadata = result.metadata;
+    integrityWarnings = result.integrityWarnings;
+    filename = generateFilename(platform, 'json');
+    mimeType = 'application/json';
+  }
+
   try {
-    extraction.turns = applyHeuristics(extraction.turns);
-    const heuristicWarnings = heuristicIntegrityCheck(extraction.turns);
-    extraction.errors = (extraction.errors || []).concat(heuristicWarnings);
+    await downloadViaBackground(content, filename, mimeType);
   } catch (err) {
-    console.warn('[Chat Archive] Heuristics pass failed (non-fatal):', err);
-  }
-
-  // --- Serialize and download ---
-  const downloadResults = [];
-
-  if (format === 'json' || format === 'both') {
+    console.warn('[Chat Archive] Background download failed, trying blob fallback:', err);
     try {
-      const { json, metadata, integrityWarnings } = serializeToJSON(extraction, platform);
-      const filename = generateFilename(platform, 'json');
-      await downloadFile(json, filename, 'application/json');
-      downloadResults.push({ format: 'json', metadata, integrityWarnings });
-    } catch (err) {
-      return { success: false, error: `JSON export failed: ${err.message}` };
-    }
-  }
-
-  if (format === 'markdown' || format === 'both') {
-    try {
-      const { markdown, metadata, integrityWarnings } = serializeToMarkdown(extraction, platform);
-      const filename = generateFilename(platform, 'md');
-      await downloadFile(markdown, filename, 'text/markdown');
-      downloadResults.push({ format: 'markdown', metadata, integrityWarnings });
-    } catch (err) {
-      if (format === 'markdown') {
-        return { success: false, error: `Markdown export failed: ${err.message}` };
-      }
-      // If 'both', JSON succeeded — report partial success
-      console.warn('[Chat Archive] Markdown export failed (JSON succeeded):', err);
+      downloadViaBlob(content, filename, mimeType);
+    } catch (blobErr) {
+      return { success: false, error: `Download failed: ${blobErr.message}` };
     }
   }
 
   const elapsed = Date.now() - startTime;
   console.log(`[Chat Archive] Export complete: ${extraction.turns.length} turns in ${elapsed}ms`);
 
-  // Merge metadata from first download result
-  const primaryResult = downloadResults[0] || {};
-
   return {
     success: true,
     metadata: {
-      ...(primaryResult.metadata || {}),
+      ...metadata,
       extraction_time_ms: elapsed,
-      formats_exported: downloadResults.map((r) => r.format),
     },
-    integrityWarnings: primaryResult.integrityWarnings || [],
+    integrityWarnings,
   };
 }

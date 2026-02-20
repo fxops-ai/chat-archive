@@ -1,12 +1,42 @@
 // =============================================================================
-// Chat Archive — Serializer (JSON + Markdown)
+// Chat Archive — Serializer
 // =============================================================================
-// Transforms extracted turns into durable export formats.
-// JSON is the canonical format. Markdown is the human-readable format.
-// Both are addressable artifacts — they have destinations beyond the export.
+// Transforms extracted turns into JSON (canonical format) and Markdown.
+//
+// CHANGELOG
+// v0.2.1 — Fix: Escape HTML entities in Markdown output to prevent tag
+//           contamination. Raw HTML in assistant content (e.g. <style>, <div>)
+//           was breaking Markdown renderers by entering HTML mode mid-document.
+//           JSON output is unaffected — raw content is preserved as-is there.
+//           GitHub issue: HTML tag contamination in .md export (turn 20 bug)
+
+/**
+ * Escape HTML entities in a string for safe Markdown output.
+ * Only applied in the Markdown serialization path — JSON stores raw content.
+ *
+ * Escapes: < > & " '
+ * This prevents any HTML tags in conversation content from being interpreted
+ * as HTML by Markdown renderers, which can corrupt all subsequent formatting.
+ *
+ * @param {string} text - Raw content string
+ * @returns {string} - Content safe for Markdown output
+ */
+function escapeHtmlForMarkdown(text) {
+  return text
+    .replace(/&/g, '&amp;')   // Must be first — avoids double-escaping
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 /**
  * Serialize extracted turns into the canonical JSON export format.
+ * JSON stores raw, unescaped content — this is the source of truth.
+ *
+ * @param {Object} extraction - Result from an extractor { turns, errors, partial }
+ * @param {string} platform - Platform identifier (e.g., 'claude')
+ * @returns {Object} { json: string, metadata: Object, integrityWarnings: string[] }
  */
 function serializeToJSON(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
@@ -24,28 +54,16 @@ function serializeToJSON(extraction, platform) {
       extraction_errors: extraction.errors || [],
       integrity_warnings: integrityWarnings,
     },
-    conversation: extraction.turns.map((turn, index) => {
-      const entry = {
-        turn: index + 1,
-        role: turn.role || 'unknown',
-        content: turn.content,
-        classification_confidence: turn.confidence || null,
-        classification_source: turn.classificationSource || 'unknown',
-      };
-
-      // Optional fields
-      if (turn.timestamp) entry.timestamp = turn.timestamp;
-      if (turn.flagged) {
-        entry.flagged = true;
-        entry.flag_reason = turn.flagReason;
-      }
-      if (turn.extractionMethod) entry.extraction_method = turn.extractionMethod;
-      if (turn.turnId) entry.turn_id = turn.turnId;
-      if (turn.modelSlug) entry.model = turn.modelSlug;
-      if (turn.needsUserResolution) entry.needs_user_resolution = true;
-
-      return entry;
-    }),
+    conversation: extraction.turns.map((turn, index) => ({
+      turn: index + 1,
+      role: turn.role,
+      content: turn.content,           // Raw content — no escaping in JSON
+      classification_confidence: turn.confidence || null,
+      classification_source: turn.classificationSource || 'manual',
+      extraction_method: turn.extractionMethod || 'direct',
+      ...(turn.timestamp && { timestamp: turn.timestamp }),
+      ...(turn.flagged && { flagged: true, flag_reason: turn.flagReason }),
+    })),
   };
 
   return {
@@ -57,90 +75,78 @@ function serializeToJSON(extraction, platform) {
 
 /**
  * Serialize extracted turns into Markdown format.
+ * HTML entities are escaped in content to prevent tag contamination.
+ *
+ * @param {Object} extraction - Result from an extractor { turns, errors, partial }
+ * @param {string} platform - Platform identifier (e.g., 'claude')
+ * @returns {Object} { markdown: string, metadata: Object, integrityWarnings: string[] }
  */
 function serializeToMarkdown(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
-
+  const exportTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const platformName = platformToDisplayName(platform);
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const sourceUrl = window.location.href;
 
   const lines = [];
 
-  // --- Header ---
+  // Header
   lines.push(`# Chat Export — ${platformName}`);
-  lines.push(`**Exported:** ${timestamp}  `);
-  lines.push(`**Source:** ${sourceUrl}  `);
+  lines.push(`**Exported:** ${exportTimestamp}  `);
+  lines.push(`**Source:** ${window.location.href}  `);
   lines.push(`**Turns:** ${extraction.turns.length}`);
 
   if (extraction.partial) {
-    lines.push(`**Status:** Partial export (${extraction.errors.length} errors)`);
+    lines.push(`\n> ⚠️ **Partial export** — some turns may be missing. Check JSON export for details.`);
   }
 
-  lines.push('');
-  lines.push('---');
-  lines.push('');
+  lines.push('\n---\n');
 
-  // --- Turns ---
-  for (let i = 0; i < extraction.turns.length; i++) {
-    const turn = extraction.turns[i];
-    const role = turn.role || 'Unknown';
-    const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
-
+  // Turns
+  for (const turn of extraction.turns) {
+    const roleLabel = turn.role === 'user' ? 'User' : 'Assistant';
     lines.push(`## ${roleLabel}`);
 
     if (turn.timestamp) {
-      lines.push(`*${turn.timestamp}*`);
-      lines.push('');
+      lines.push(`*${turn.timestamp}*\n`);
     }
 
-    // Content: preserve as-is (clipboard extraction gives us markdown already)
-    lines.push(turn.content || '*(empty)*');
+    // v0.2.1: Escape HTML entities to prevent tag contamination in Markdown renderers.
+    // Raw HTML in content (e.g. <style>, <div>, <script>) would otherwise cause
+    // renderers to enter HTML mode, breaking all subsequent Markdown formatting.
+    const safeContent = escapeHtmlForMarkdown(turn.content || '');
+    lines.push(safeContent);
 
     if (turn.flagged) {
-      lines.push('');
-      lines.push(`> ⚠️ ${turn.flagReason || 'Flagged'}`);
+      lines.push(`\n> ⚠️ *Flagged: ${turn.flagReason || 'Unknown reason'}*`);
     }
 
-    if (turn.needsUserResolution) {
-      lines.push('');
-      lines.push('> ⚠️ Role classification uncertain — may need manual correction');
-    }
-
-    lines.push('');
-    lines.push('---');
-    lines.push('');
+    lines.push('\n---\n');
   }
 
-  // --- Footer ---
-  if (integrityWarnings.length > 0) {
-    lines.push('## Export Notes');
-    lines.push('');
-    for (const warning of integrityWarnings) {
-      lines.push(`- ${warning}`);
-    }
-    lines.push('');
-  }
-
+  // Footer
   lines.push(`*Exported by Chat Archive v${EXTENSION_VERSION}*`);
+
+  const metadata = {
+    source_platform: platformName,
+    source_url: window.location.href,
+    export_timestamp: new Date().toISOString(),
+    extension_version: EXTENSION_VERSION,
+    total_turns: extraction.turns.length,
+    flagged_turns: extraction.turns.filter((t) => t.flagged).length,
+    partial_export: extraction.partial || false,
+    extraction_errors: extraction.errors || [],
+    integrity_warnings: integrityWarnings,
+  };
 
   return {
     markdown: lines.join('\n'),
-    metadata: {
-      source_platform: platformName,
-      source_url: sourceUrl,
-      export_timestamp: new Date().toISOString(),
-      extension_version: EXTENSION_VERSION,
-      total_turns: extraction.turns.length,
-      flagged_turns: extraction.turns.filter((t) => t.flagged).length,
-      partial_export: extraction.partial || false,
-    },
+    metadata,
     integrityWarnings,
   };
 }
 
 /**
- * Run integrity checks on extracted turns before serialization.
+ * Run integrity checks on the extracted turns before serialization.
+ * These are sanity checks, not security enforcement.
  */
 function runIntegrityChecks(turns) {
   const warnings = [];
@@ -160,7 +166,7 @@ function runIntegrityChecks(turns) {
   if (alternationViolations > 0) {
     warnings.push(
       `${alternationViolations} consecutive same-role turn(s) detected. ` +
-      'This may indicate missed turns or system messages.'
+        'This may indicate missed turns or system messages.'
     );
   }
 
@@ -183,11 +189,19 @@ function runIntegrityChecks(turns) {
     warnings.push(`${emptyTurns.length} empty turn(s) detected`);
   }
 
-  // Check 5: Unresolved roles
-  const unknownRoles = turns.filter((t) => !t.role || t.role === 'unknown');
-  if (unknownRoles.length > 0) {
-    warnings.push(`${unknownRoles.length} turn(s) with unknown roles`);
-  }
-
   return warnings;
+}
+
+/**
+ * Map platform ID to user-facing display name.
+ */
+function platformToDisplayName(platform) {
+  const names = {
+    claude: 'claude.ai',
+    chatgpt: 'chatgpt.com',
+    gemini: 'gemini.google.com',
+    grok: 'grok.com',
+    'grok-x': 'x.com/i/grok',
+  };
+  return names[platform] || platform;
 }

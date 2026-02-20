@@ -15,7 +15,7 @@
 
 // --- src/utils/constants.js ---
 // =============================================================================
-// Chat Archive — Constants & Shared Utilities
+// Chat Archive — Constants & Types
 // =============================================================================
 
 // --- Execution Limits (Anti-Runaway Circuit Breakers) ---
@@ -26,13 +26,11 @@ const SAFETY_LIMITS = {
   MAX_CLIPBOARD_WAIT_MS: 2_000,
   MAX_SINGLE_TURN_SIZE: 100_000,
   SCROLL_STABILITY_THRESHOLD: 3,
-  CLIPBOARD_READ_DELAY_MS: 175,
-  SCROLL_STEP_DELAY_MS: 300,
-  HOVER_SETTLE_MS: 50,
 };
 
+// --- Schema & Version ---
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.2.0';
+const EXTENSION_VERSION = '0.2.1';
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -45,166 +43,6 @@ function detectPlatform() {
   if (host === 'grok.com') return 'grok';
   if (host === 'x.com' && path.startsWith('/i/grok')) return 'grok-x';
   return null;
-}
-
-function platformToDisplayName(platform) {
-  const names = {
-    claude: 'claude.ai',
-    chatgpt: 'chatgpt.com',
-    gemini: 'gemini.google.com',
-    grok: 'grok.com',
-    'grok-x': 'x.com/i/grok',
-  };
-  return names[platform] || platform;
-}
-
-// --- Shared DOM Utilities ---
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Test if clipboard read access is available.
- * Some browsers block navigator.clipboard.readText() in extension contexts.
- */
-async function testClipboardAccess() {
-  try {
-    await navigator.clipboard.readText();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Fuzzy button finder — resilient to selector changes.
- * Searches by aria-label, title, data-testid, and tooltip text.
- */
-function findActionButton(container, intent) {
-  // intent: 'copy', 'edit', 'copy text', 'copy prompt', etc.
-  const intents = Array.isArray(intent) ? intent : [intent];
-
-  for (const label of intents) {
-    const strategies = [
-      // Strategy 1: exact aria-label (most stable — user-facing)
-      () => container.querySelector(`button[aria-label="${label}"]`),
-      // Strategy 2: case-insensitive aria-label contains
-      () => container.querySelector(`button[aria-label*="${label}" i]`),
-      // Strategy 3: data-testid containing intent
-      () => container.querySelector(`button[data-testid*="${label.toLowerCase().replace(/\s+/g, '-')}"]`),
-      // Strategy 4: title attribute
-      () => container.querySelector(`button[title*="${label}" i]`),
-      // Strategy 5: mattooltip (Angular Material)
-      () => container.querySelector(`button[mattooltip*="${label}" i]`),
-    ];
-
-    for (const strategy of strategies) {
-      try {
-        const result = strategy();
-        if (result) return result;
-      } catch {
-        // Selector syntax error — skip
-      }
-    }
-  }
-  return null;
-}
-
-/**
- * Click a copy button and read the resulting clipboard content.
- * Returns the clipboard text, or null on failure.
- */
-async function clickCopyAndRead(button) {
-  if (!button) return null;
-
-  try {
-    // Snapshot current clipboard to detect change
-    let previous = '';
-    try {
-      previous = await navigator.clipboard.readText();
-    } catch {
-      // Clipboard empty or inaccessible — ok, we'll still try
-    }
-
-    button.click();
-    await wait(SAFETY_LIMITS.CLIPBOARD_READ_DELAY_MS);
-
-    const content = await navigator.clipboard.readText();
-
-    // Verify we got something (and ideally something different)
-    if (content && content.length > 0) {
-      return content;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Scroll a container to load all lazy-loaded content.
- * Returns the number of scroll iterations performed.
- */
-async function scrollToLoadAll(scrollContainer, countSelector, startTime) {
-  let previousCount = 0;
-  let stableIterations = 0;
-  let scrollIterations = 0;
-
-  scrollContainer.scrollTop = 0;
-  await wait(500);
-
-  while (
-    stableIterations < SAFETY_LIMITS.SCROLL_STABILITY_THRESHOLD &&
-    scrollIterations < SAFETY_LIMITS.MAX_SCROLL_ITERATIONS
-  ) {
-    if (startTime && Date.now() - startTime > SAFETY_LIMITS.MAX_EXTRACTION_TIME_MS) break;
-
-    const currentElements = document.querySelectorAll(countSelector);
-    if (currentElements.length === previousCount) {
-      stableIterations++;
-    } else {
-      stableIterations = 0;
-      previousCount = currentElements.length;
-    }
-
-    scrollContainer.scrollBy(0, scrollContainer.clientHeight * 0.8);
-    await wait(SAFETY_LIMITS.SCROLL_STEP_DELAY_MS);
-    scrollIterations++;
-  }
-
-  // Scroll back to top for clean state
-  scrollContainer.scrollTop = 0;
-  await wait(200);
-
-  console.log(`[Chat Archive] Scroll complete: ${previousCount} elements after ${scrollIterations} scrolls`);
-  return scrollIterations;
-}
-
-/**
- * Find the scrollable ancestor of a given element.
- */
-function findScrollableAncestor(element) {
-  let parent = element.parentElement;
-  while (parent) {
-    const style = window.getComputedStyle(parent);
-    if (style.overflowY === 'scroll' || style.overflowY === 'auto') {
-      return parent;
-    }
-    parent = parent.parentElement;
-  }
-  return null;
-}
-
-/**
- * Flag a turn for size if needed, mutates the turn object.
- */
-function flagIfOversized(turn) {
-  if (turn.content && turn.content.length > SAFETY_LIMITS.MAX_SINGLE_TURN_SIZE) {
-    turn.flagged = true;
-    turn.flagReason = 'Content exceeds 100KB';
-  }
-  return turn;
 }
 
 
@@ -1663,14 +1501,44 @@ function heuristicIntegrityCheck(turns) {
 
 // --- src/utils/serializer.js ---
 // =============================================================================
-// Chat Archive — Serializer (JSON + Markdown)
+// Chat Archive — Serializer
 // =============================================================================
-// Transforms extracted turns into durable export formats.
-// JSON is the canonical format. Markdown is the human-readable format.
-// Both are addressable artifacts — they have destinations beyond the export.
+// Transforms extracted turns into JSON (canonical format) and Markdown.
+//
+// CHANGELOG
+// v0.2.1 — Fix: Escape HTML entities in Markdown output to prevent tag
+//           contamination. Raw HTML in assistant content (e.g. <style>, <div>)
+//           was breaking Markdown renderers by entering HTML mode mid-document.
+//           JSON output is unaffected — raw content is preserved as-is there.
+//           GitHub issue: HTML tag contamination in .md export (turn 20 bug)
+
+/**
+ * Escape HTML entities in a string for safe Markdown output.
+ * Only applied in the Markdown serialization path — JSON stores raw content.
+ *
+ * Escapes: < > & " '
+ * This prevents any HTML tags in conversation content from being interpreted
+ * as HTML by Markdown renderers, which can corrupt all subsequent formatting.
+ *
+ * @param {string} text - Raw content string
+ * @returns {string} - Content safe for Markdown output
+ */
+function escapeHtmlForMarkdown(text) {
+  return text
+    .replace(/&/g, '&amp;')   // Must be first — avoids double-escaping
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 /**
  * Serialize extracted turns into the canonical JSON export format.
+ * JSON stores raw, unescaped content — this is the source of truth.
+ *
+ * @param {Object} extraction - Result from an extractor { turns, errors, partial }
+ * @param {string} platform - Platform identifier (e.g., 'claude')
+ * @returns {Object} { json: string, metadata: Object, integrityWarnings: string[] }
  */
 function serializeToJSON(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
@@ -1688,28 +1556,16 @@ function serializeToJSON(extraction, platform) {
       extraction_errors: extraction.errors || [],
       integrity_warnings: integrityWarnings,
     },
-    conversation: extraction.turns.map((turn, index) => {
-      const entry = {
-        turn: index + 1,
-        role: turn.role || 'unknown',
-        content: turn.content,
-        classification_confidence: turn.confidence || null,
-        classification_source: turn.classificationSource || 'unknown',
-      };
-
-      // Optional fields
-      if (turn.timestamp) entry.timestamp = turn.timestamp;
-      if (turn.flagged) {
-        entry.flagged = true;
-        entry.flag_reason = turn.flagReason;
-      }
-      if (turn.extractionMethod) entry.extraction_method = turn.extractionMethod;
-      if (turn.turnId) entry.turn_id = turn.turnId;
-      if (turn.modelSlug) entry.model = turn.modelSlug;
-      if (turn.needsUserResolution) entry.needs_user_resolution = true;
-
-      return entry;
-    }),
+    conversation: extraction.turns.map((turn, index) => ({
+      turn: index + 1,
+      role: turn.role,
+      content: turn.content,           // Raw content — no escaping in JSON
+      classification_confidence: turn.confidence || null,
+      classification_source: turn.classificationSource || 'manual',
+      extraction_method: turn.extractionMethod || 'direct',
+      ...(turn.timestamp && { timestamp: turn.timestamp }),
+      ...(turn.flagged && { flagged: true, flag_reason: turn.flagReason }),
+    })),
   };
 
   return {
@@ -1721,90 +1577,78 @@ function serializeToJSON(extraction, platform) {
 
 /**
  * Serialize extracted turns into Markdown format.
+ * HTML entities are escaped in content to prevent tag contamination.
+ *
+ * @param {Object} extraction - Result from an extractor { turns, errors, partial }
+ * @param {string} platform - Platform identifier (e.g., 'claude')
+ * @returns {Object} { markdown: string, metadata: Object, integrityWarnings: string[] }
  */
 function serializeToMarkdown(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
-
+  const exportTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const platformName = platformToDisplayName(platform);
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const sourceUrl = window.location.href;
 
   const lines = [];
 
-  // --- Header ---
+  // Header
   lines.push(`# Chat Export — ${platformName}`);
-  lines.push(`**Exported:** ${timestamp}  `);
-  lines.push(`**Source:** ${sourceUrl}  `);
+  lines.push(`**Exported:** ${exportTimestamp}  `);
+  lines.push(`**Source:** ${window.location.href}  `);
   lines.push(`**Turns:** ${extraction.turns.length}`);
 
   if (extraction.partial) {
-    lines.push(`**Status:** Partial export (${extraction.errors.length} errors)`);
+    lines.push(`\n> ⚠️ **Partial export** — some turns may be missing. Check JSON export for details.`);
   }
 
-  lines.push('');
-  lines.push('---');
-  lines.push('');
+  lines.push('\n---\n');
 
-  // --- Turns ---
-  for (let i = 0; i < extraction.turns.length; i++) {
-    const turn = extraction.turns[i];
-    const role = turn.role || 'Unknown';
-    const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
-
+  // Turns
+  for (const turn of extraction.turns) {
+    const roleLabel = turn.role === 'user' ? 'User' : 'Assistant';
     lines.push(`## ${roleLabel}`);
 
     if (turn.timestamp) {
-      lines.push(`*${turn.timestamp}*`);
-      lines.push('');
+      lines.push(`*${turn.timestamp}*\n`);
     }
 
-    // Content: preserve as-is (clipboard extraction gives us markdown already)
-    lines.push(turn.content || '*(empty)*');
+    // v0.2.1: Escape HTML entities to prevent tag contamination in Markdown renderers.
+    // Raw HTML in content (e.g. <style>, <div>, <script>) would otherwise cause
+    // renderers to enter HTML mode, breaking all subsequent Markdown formatting.
+    const safeContent = escapeHtmlForMarkdown(turn.content || '');
+    lines.push(safeContent);
 
     if (turn.flagged) {
-      lines.push('');
-      lines.push(`> ⚠️ ${turn.flagReason || 'Flagged'}`);
+      lines.push(`\n> ⚠️ *Flagged: ${turn.flagReason || 'Unknown reason'}*`);
     }
 
-    if (turn.needsUserResolution) {
-      lines.push('');
-      lines.push('> ⚠️ Role classification uncertain — may need manual correction');
-    }
-
-    lines.push('');
-    lines.push('---');
-    lines.push('');
+    lines.push('\n---\n');
   }
 
-  // --- Footer ---
-  if (integrityWarnings.length > 0) {
-    lines.push('## Export Notes');
-    lines.push('');
-    for (const warning of integrityWarnings) {
-      lines.push(`- ${warning}`);
-    }
-    lines.push('');
-  }
-
+  // Footer
   lines.push(`*Exported by Chat Archive v${EXTENSION_VERSION}*`);
+
+  const metadata = {
+    source_platform: platformName,
+    source_url: window.location.href,
+    export_timestamp: new Date().toISOString(),
+    extension_version: EXTENSION_VERSION,
+    total_turns: extraction.turns.length,
+    flagged_turns: extraction.turns.filter((t) => t.flagged).length,
+    partial_export: extraction.partial || false,
+    extraction_errors: extraction.errors || [],
+    integrity_warnings: integrityWarnings,
+  };
 
   return {
     markdown: lines.join('\n'),
-    metadata: {
-      source_platform: platformName,
-      source_url: sourceUrl,
-      export_timestamp: new Date().toISOString(),
-      extension_version: EXTENSION_VERSION,
-      total_turns: extraction.turns.length,
-      flagged_turns: extraction.turns.filter((t) => t.flagged).length,
-      partial_export: extraction.partial || false,
-    },
+    metadata,
     integrityWarnings,
   };
 }
 
 /**
- * Run integrity checks on extracted turns before serialization.
+ * Run integrity checks on the extracted turns before serialization.
+ * These are sanity checks, not security enforcement.
  */
 function runIntegrityChecks(turns) {
   const warnings = [];
@@ -1824,7 +1668,7 @@ function runIntegrityChecks(turns) {
   if (alternationViolations > 0) {
     warnings.push(
       `${alternationViolations} consecutive same-role turn(s) detected. ` +
-      'This may indicate missed turns or system messages.'
+        'This may indicate missed turns or system messages.'
     );
   }
 
@@ -1847,13 +1691,21 @@ function runIntegrityChecks(turns) {
     warnings.push(`${emptyTurns.length} empty turn(s) detected`);
   }
 
-  // Check 5: Unresolved roles
-  const unknownRoles = turns.filter((t) => !t.role || t.role === 'unknown');
-  if (unknownRoles.length > 0) {
-    warnings.push(`${unknownRoles.length} turn(s) with unknown roles`);
-  }
-
   return warnings;
+}
+
+/**
+ * Map platform ID to user-facing display name.
+ */
+function platformToDisplayName(platform) {
+  const names = {
+    claude: 'claude.ai',
+    chatgpt: 'chatgpt.com',
+    gemini: 'gemini.google.com',
+    grok: 'grok.com',
+    'grok-x': 'x.com/i/grok',
+  };
+  return names[platform] || platform;
 }
 
 
@@ -1929,14 +1781,12 @@ async function downloadFile(content, filename, mimeType) {
 
 // --- src/content.js ---
 // =============================================================================
-// Chat Archive — Content Script (Orchestrator)
+// Chat Archive — Content Script
 // =============================================================================
-// Injected into AI chat platform pages. Orchestrates:
-//   Pass 0: Platform-specific button extraction (clipboard)
-//   Pass 1: Structural heuristics (fallback for uncertain turns)
-//   Serialization: JSON + Markdown
-//   Download: via Chrome API or blob fallback
+// Injected into AI chat platform pages. Orchestrates extraction pipeline.
+// Phase 1: Claude.ai only, direct text extraction, JSON + Markdown export.
 
+// Listen for messages from the popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'detect') {
     const platform = detectPlatform();
@@ -1948,7 +1798,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handleExtraction(message.options || {})
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
+    return true; // Keep channel open for async
   }
 
   if (message.action === 'ping') {
@@ -1959,10 +1809,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 /**
  * Main extraction pipeline.
- * 1. Platform-specific Pass 0 extraction (clipboard + direct text)
- * 2. Pass 1 heuristics on any uncertain turns
- * 3. Serialize to requested format(s)
- * 4. Download
  */
 async function handleExtraction(options) {
   const platform = detectPlatform();
@@ -1970,31 +1816,22 @@ async function handleExtraction(options) {
     return { success: false, error: 'Not on a supported chat platform' };
   }
 
-  const format = options.format || 'json'; // 'json', 'markdown', 'both'
-  console.log(`[Chat Archive] Starting extraction: platform=${platform}, format=${format}`);
+  const format = options.format || 'json'; // 'json' | 'markdown'
+  console.log(`[Chat Archive] Starting extraction for platform: ${platform}, format: ${format}`);
   const startTime = Date.now();
 
-  // --- Pass 0: Platform-specific extraction ---
   let extraction;
+
   try {
     switch (platform) {
       case 'claude':
         extraction = await extractClaudeConversation();
         break;
-      case 'chatgpt':
-        extraction = await extractChatGPTConversation();
-        break;
-      case 'gemini':
-        extraction = await extractGeminiConversation();
-        break;
-      case 'grok':
-        extraction = await extractGrokConversation();
-        break;
-      case 'grok-x':
-        extraction = await extractGrokXConversation();
-        break;
       default:
-        return { success: false, error: `Unknown platform: ${platform}` };
+        return {
+          success: false,
+          error: `Platform "${platform}" extraction not yet implemented. Coming in Phase 2.`,
+        };
     }
   } catch (err) {
     console.error('[Chat Archive] Extraction failed:', err);
@@ -2009,58 +1846,45 @@ async function handleExtraction(options) {
     };
   }
 
-  // --- Pass 1: Heuristics for uncertain turns ---
+  let content, filename, mimeType, metadata, integrityWarnings;
+
+  if (format === 'markdown') {
+    const result = serializeToMarkdown(extraction, platform);
+    content = result.markdown;
+    metadata = result.metadata;
+    integrityWarnings = result.integrityWarnings;
+    filename = generateFilename(platform, 'md');
+    mimeType = 'text/markdown';
+  } else {
+    const result = serializeToJSON(extraction, platform);
+    content = result.json;
+    metadata = result.metadata;
+    integrityWarnings = result.integrityWarnings;
+    filename = generateFilename(platform, 'json');
+    mimeType = 'application/json';
+  }
+
   try {
-    extraction.turns = applyHeuristics(extraction.turns);
-    const heuristicWarnings = heuristicIntegrityCheck(extraction.turns);
-    extraction.errors = (extraction.errors || []).concat(heuristicWarnings);
+    await downloadViaBackground(content, filename, mimeType);
   } catch (err) {
-    console.warn('[Chat Archive] Heuristics pass failed (non-fatal):', err);
-  }
-
-  // --- Serialize and download ---
-  const downloadResults = [];
-
-  if (format === 'json' || format === 'both') {
+    console.warn('[Chat Archive] Background download failed, trying blob fallback:', err);
     try {
-      const { json, metadata, integrityWarnings } = serializeToJSON(extraction, platform);
-      const filename = generateFilename(platform, 'json');
-      await downloadFile(json, filename, 'application/json');
-      downloadResults.push({ format: 'json', metadata, integrityWarnings });
-    } catch (err) {
-      return { success: false, error: `JSON export failed: ${err.message}` };
-    }
-  }
-
-  if (format === 'markdown' || format === 'both') {
-    try {
-      const { markdown, metadata, integrityWarnings } = serializeToMarkdown(extraction, platform);
-      const filename = generateFilename(platform, 'md');
-      await downloadFile(markdown, filename, 'text/markdown');
-      downloadResults.push({ format: 'markdown', metadata, integrityWarnings });
-    } catch (err) {
-      if (format === 'markdown') {
-        return { success: false, error: `Markdown export failed: ${err.message}` };
-      }
-      // If 'both', JSON succeeded — report partial success
-      console.warn('[Chat Archive] Markdown export failed (JSON succeeded):', err);
+      downloadViaBlob(content, filename, mimeType);
+    } catch (blobErr) {
+      return { success: false, error: `Download failed: ${blobErr.message}` };
     }
   }
 
   const elapsed = Date.now() - startTime;
   console.log(`[Chat Archive] Export complete: ${extraction.turns.length} turns in ${elapsed}ms`);
 
-  // Merge metadata from first download result
-  const primaryResult = downloadResults[0] || {};
-
   return {
     success: true,
     metadata: {
-      ...(primaryResult.metadata || {}),
+      ...metadata,
       extraction_time_ms: elapsed,
-      formats_exported: downloadResults.map((r) => r.format),
     },
-    integrityWarnings: primaryResult.integrityWarnings || [],
+    integrityWarnings,
   };
 }
 
