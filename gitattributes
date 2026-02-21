@@ -1,0 +1,33 @@
+# =============================================================================
+# Chat Archive — Git Line Ending Normalization
+# =============================================================================
+# Ensures consistent line endings across Mac and Windows dev machines.
+# All text files are stored as LF in the repo (Unix standard).
+# Windows machines will checkout with CRLF locally (handled by Git automatically).
+# This eliminates noisy diffs caused by LF/CRLF differences between machines.
+#
+# Rule: text=auto lets Git detect text files and normalize them.
+# Explicit overrides below handle specific file types we care about.
+
+# Default: normalize all text files to LF in repo
+* text=auto
+
+# Source files — always LF
+*.js        text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.sh        text eol=lf
+
+# Shell scripts — LF required or they break on Mac/Linux
+build.sh    text eol=lf
+
+# Binary files — no line ending conversion
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.zip       binary
+*.crx       binary

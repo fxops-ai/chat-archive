@@ -562,6 +562,134 @@ No novel dependencies. Uses Chrome's `downloads` API which is stable and well-do
 
 ---
 
+## src/utils/constants.js — Shared Utilities Module
+
+> **Note added v0.2.1:** Despite its filename, `constants.js` is the **shared utilities
+> module** for the entire codebase. It was documented as "Safety limits, platform
+> detection" in earlier versions of this spec. That description is incomplete.
+> This section documents what the file actually contains.
+
+---
+
+### What it contains
+
+The file has four sections, concatenated in dependency order by `build.sh`:
+
+#### 1. Safety Limits (Circuit Breakers)
+
+```javascript
+const SAFETY_LIMITS = {
+  MAX_TURNS: 500,
+  MAX_SCROLL_ITERATIONS: 100,
+  MAX_EXTRACTION_TIME_MS: 60_000,
+  MAX_CLIPBOARD_WAIT_MS: 2_000,
+  MAX_SINGLE_TURN_SIZE: 100_000,
+  SCROLL_STABILITY_THRESHOLD: 3,
+  CLIPBOARD_READ_DELAY_MS: 175,
+  SCROLL_STEP_DELAY_MS: 300,
+  HOVER_SETTLE_MS: 50,
+};
+```
+
+#### 2. Version & Schema Constants
+
+```javascript
+const SCHEMA_VERSION = '1.0';
+const EXTENSION_VERSION = '0.2.1';  // Update here + manifest.json on every release
+```
+
+**Important:** Version must be updated in TWO places on every release:
+- `src/utils/constants.js` → `EXTENSION_VERSION`
+- `manifest.json` → `"version"`
+
+Both must match. The footer of every export file references `EXTENSION_VERSION`.
+
+#### 3. Platform Detection
+
+```javascript
+function detectPlatform() { ... }       // Maps hostname → platform ID
+function platformToDisplayName() { ... } // Maps platform ID → display string
+```
+
+#### 4. Shared DOM Utilities
+
+These functions are used by **all five platform extractors**. They live here rather
+than in individual extractor files to avoid duplication and ensure consistent behavior:
+
+| Function | Purpose | Used by |
+|----------|---------|---------|
+| `wait(ms)` | Promise-based delay | All extractors |
+| `testClipboardAccess()` | Verify clipboard API available | All extractors |
+| `findActionButton(container, intent)` | Fuzzy button finder (aria-label, testid, title, tooltip) | All extractors |
+| `clickCopyAndRead(button)` | Click copy button → read clipboard | All extractors |
+| `scrollToLoadAll(container, selector, startTime)` | Scroll to trigger lazy loading | Claude, ChatGPT, Gemini, Grok |
+| `scrollToLoadAllGrokX(container, startTime)` | Grok-X specific scroll strategy | Grok-X only |
+| `findScrollableAncestor(element)` | Walk DOM to find scrollable parent | All extractors |
+| `flagIfOversized(turn)` | Mutate turn object if content >100KB | All extractors |
+
+---
+
+### Why it's named constants.js
+
+Historical artifact. The file started as a constants-only file in Phase 1. As Phase 2
+added five platform extractors, shared DOM utilities were added here to avoid
+duplicating `wait()`, `findActionButton()`, and `scrollToLoadAll()` across every
+extractor file. The name was never updated.
+
+**Renaming to `shared.js` or `utils.js`** is tracked as a future cleanup task.
+It would require updating `build.sh` (the concatenation order) and any documentation
+references. There is no functional impact — the build system doesn't care about
+the filename, only the order in which files are concatenated.
+
+---
+
+### Editing guidelines
+
+**When patching this file:**
+1. Always `diff` against the existing version before replacing
+2. Never replace the entire file from an external source without verifying all
+   four sections are present
+3. The version bump (`EXTENSION_VERSION`) is the only routine change — do it
+   with a targeted `sed` or find-and-replace, not a full file replacement
+4. After any change, rebuild and verify `scrollToLoadAll` appears as both a
+   definition and multiple call sites in the built `content.js`
+
+**Verification command (Mac/Linux):**
+```bash
+grep -n "scrollToLoadAll" content.js
+# Should show: one function definition + 4-5 call sites
+# If only call sites appear with no definition — the file was stripped
+```
+
+**Verification command (Windows PowerShell):**
+```powershell
+Select-String -Path "content.js" -Pattern "scrollToLoadAll"
+```
+
+---
+
+### v0.2.1 post-mortem
+
+During the v0.2.1 patch session, `constants.js` was replaced with a minimal version
+containing only `SAFETY_LIMITS`, `SCHEMA_VERSION`, `EXTENSION_VERSION`, and
+`detectPlatform()`. The shared DOM utilities — including `scrollToLoadAll()` — were
+stripped, causing an immediate `scrollToLoadAll is not defined` runtime error on all
+platforms except Grok-X.
+
+**Root cause:** The patching session referenced the Phase 1 source documentation
+(`chat-archive-phase1-source.md`), which contained an early version of `constants.js`
+before shared utilities were added in Phase 2. The live file had grown significantly
+beyond what was documented.
+
+**Detection:** The error surfaced during pre-release testing on the Windows machine
+before the GitHub Release was published. The Mac Mini had a backup of the working file
+(`constants.js.backup`) which was used to restore the missing functions.
+
+**Prevention:** This architecture section, the warning in README, and the verification
+commands above. When in doubt — diff first, replace second.
+
+---
+
 ## Standardized Test Conversation
 
 To validate across all four platforms, create the following conversation on each:
