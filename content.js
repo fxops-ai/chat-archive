@@ -1989,10 +1989,22 @@ async function handleExtraction(options) {
       case 'claude':
         extraction = await extractClaudeConversation();
         break;
+      case 'chatgpt':
+        extraction = await extractChatGPTConversation();
+        break;
+      case 'gemini':
+        extraction = await extractGeminiConversation();
+        break;
+      case 'grok':
+        extraction = await extractGrokConversation();
+        break;
+      case 'grok-x':
+        extraction = await extractGrokXConversation();
+        break;
       default:
         return {
           success: false,
-          error: `Platform "${platform}" extraction not yet implemented. Coming in Phase 2.`,
+          error: `Platform "${platform}" extraction not yet implemented.`,
         };
     }
   } catch (err) {
@@ -2049,5 +2061,4 @@ async function handleExtraction(options) {
     integrityWarnings,
   };
 }
-
 })();
