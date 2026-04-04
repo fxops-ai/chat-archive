@@ -22,17 +22,17 @@
 const SAFETY_LIMITS = {
   MAX_TURNS: 500,
   MAX_SCROLL_ITERATIONS: 100,
-  MAX_EXTRACTION_TIME_MS: 60_000,
+  MAX_EXTRACTION_TIME_MS: 120_000,      // Raised from 60s — long conversations are a primary use case
   MAX_CLIPBOARD_WAIT_MS: 2_000,
   MAX_SINGLE_TURN_SIZE: 100_000,
   SCROLL_STABILITY_THRESHOLD: 3,
-  CLIPBOARD_READ_DELAY_MS: 175,
-  SCROLL_STEP_DELAY_MS: 300,
+  CLIPBOARD_READ_DELAY_MS: 100,         // Reduced from 175ms — saves ~4.5s on a 60-turn conversation
+  SCROLL_STEP_DELAY_MS: 150,            // Reduced from 300ms — halves scroll phase duration
   HOVER_SETTLE_MS: 50,
 };
 
 const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.2.1';
+const EXTENSION_VERSION = '0.2.2';     // Bumped from 0.2.1
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -206,7 +206,6 @@ function flagIfOversized(turn) {
   }
   return turn;
 }
-
 
 // --- src/extractors/claude.js ---
 // =============================================================================
