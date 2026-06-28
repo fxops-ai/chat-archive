@@ -10,6 +10,8 @@ async function extractClaudeConversation() {
   const startTime = Date.now();
   const turns = [];
   const errors = [];
+  const rawArtifacts = [];    // { processed: ProcessedArtifact, turnNumber: number }
+  let artifactPanelCount = 0; // Panel opens only (card surface)
 
   // 1. Find scroll container
   const scrollContainer = findClaudeScrollContainer();
@@ -52,19 +54,70 @@ async function extractClaudeConversation() {
 
       // Extract user turn
       const userTurn = await extractClaudeTurn(container, 'user', hasClipboard);
-      if (userTurn) turns.push(flagIfOversized(userTurn));
+      if (userTurn) {
+        userTurn.artifacts = [];
+        turns.push(flagIfOversized(userTurn));
+      }
 
       // Extract assistant turn
       const assistantTurn = await extractClaudeTurn(container, 'assistant', hasClipboard);
-      if (assistantTurn) turns.push(flagIfOversized(assistantTurn));
+      if (assistantTurn) {
+        assistantTurn.artifacts = [];
+        turns.push(flagIfOversized(assistantTurn));
+      }
+
+      // Artifact pass — runs after text extraction for this container.
+      // Artifacts are associated with the assistant turn (current last turn, 1-indexed).
+      const assistantTurnNumber = turns.length;
+      const candidates = detectArtifacts(container, i);
+
+      for (const candidate of candidates) {
+        if (rawArtifacts.length >= SAFETY_LIMITS.MAX_ARTIFACT_PANELS) {
+          errors.push(
+            `Artifact limit (${SAFETY_LIMITS.MAX_ARTIFACT_PANELS}) reached at` +
+            ` container ${i} — remaining artifacts skipped`
+          );
+          break;
+        }
+
+        try {
+          const { content, method } = candidate.surface === 'card'
+            ? await extractFromPanel(candidate, hasClipboard)
+            : await extractInlineCodeBlock(candidate, hasClipboard);
+
+          if (candidate.surface === 'card') artifactPanelCount++;
+
+          const processed = await processArtifact(content, candidate, method);
+          rawArtifacts.push({ processed, turnNumber: assistantTurnNumber });
+        } catch (artifactErr) {
+          errors.push(
+            `Error extracting artifact "${candidate.title}" in container ${i}: ${artifactErr.message}`
+          );
+          console.warn(`[Chat Archive] Claude: Artifact error in container ${i}:`, artifactErr);
+        }
+      }
     } catch (err) {
       errors.push(`Error extracting container ${i}: ${err.message}`);
       console.warn(`[Chat Archive] Claude: Error on container ${i}:`, err);
     }
   }
 
-  console.log(`[Chat Archive] Claude: Extracted ${turns.length} turns, ${errors.length} errors`);
-  return { turns, errors, partial: errors.length > 0 };
+  // Assemble artifact manifest and populate turn cross-references
+  const { manifest: artifactManifest, sidecarFiles } = rawArtifacts.length > 0
+    ? assembleArtifactManifest(rawArtifacts, turns)
+    : { manifest: [], sidecarFiles: [] };
+
+  console.log(
+    `[Chat Archive] Claude: Extracted ${turns.length} turns,` +
+    ` ${rawArtifacts.length} artifact(s), ${errors.length} errors`
+  );
+  return {
+    turns,
+    errors,
+    partial: errors.length > 0,
+    artifactManifest,
+    sidecarFiles,
+  };
 }
 
 /**
@@ -213,4 +266,114 @@ function findClaudeScrollContainer() {
     if (result) return result;
   }
   return null;
+}
+
+/**
+ * Group raw artifacts into a versioned manifest, populate turn cross-references,
+ * and produce a flat sidecar file list for zip assembly.
+ *
+ * Identity key: title + canonical_type
+ *   Cards with the same title and type across turns are treated as versions
+ *   of the same logical artifact. Version numbering is 1-indexed in turn order.
+ *
+ * Artifact IDs: 'artifact-001', 'artifact-002', ... (first-appearance order)
+ *
+ * changed flag:
+ *   v1 is always true (no prior version to compare).
+ *   v2+ is true if content_hash differs from the previous version.
+ *
+ * Side effect: mutates turns[turnNumber - 1].artifacts[] with cross-reference objects.
+ *
+ * @param {Array<{processed: Object, turnNumber: number}>} rawArtifacts
+ * @param {Array<Object>} turns  - Mutable turns array from extractClaudeConversation
+ * @returns {{ manifest: Array, sidecarFiles: Array<{filename: string, content: string}> }}
+ */
+function assembleArtifactManifest(rawArtifacts, turns) {
+  // Group by identity key — Map preserves insertion order (first-appearance ordering)
+  const groups = new Map();
+  let idCounter = 1;
+
+  for (const entry of rawArtifacts) {
+    const { processed } = entry;
+    const key = `${processed.title}|${processed.canonical_type}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        artifactId: 'artifact-' + String(idCounter++).padStart(3, '0'),
+        entries: [],
+      });
+    }
+    groups.get(key).entries.push(entry);
+  }
+
+  const manifest    = [];
+  const sidecarFiles = [];
+
+  for (const [, group] of groups) {
+    const { artifactId, entries } = group;
+    const first = entries[0].processed;
+
+    const versions = entries.map((entry, vIdx) => {
+      const { processed, turnNumber } = entry;
+      const vNum         = vIdx + 1;
+      const prevHash     = vIdx > 0 ? entries[vIdx - 1].processed.content_hash : null;
+      const slug         = slugify(processed.title);
+      const sidecarFilename = `${artifactId}-v${vNum}-${slug}${processed.extension}`;
+
+      // Register content for zip assembly.
+      // binary_fetch → Uint8Array, flagged binary: true so JSZip encodes correctly.
+      // browser_download → null content, no sidecar entry (file is in user's Downloads).
+      if (processed.content !== null) {
+        sidecarFiles.push({
+          filename: sidecarFilename,
+          content:  processed.content,
+          ...(processed.content instanceof Uint8Array && { binary: true }),
+        });
+      }
+
+      // Populate cross-reference on the turn object (1-indexed → 0-indexed array)
+      const turnObj = turns[turnNumber - 1];
+      if (turnObj) {
+        if (!Array.isArray(turnObj.artifacts)) turnObj.artifacts = [];
+        turnObj.artifacts.push({
+          artifact_id:    artifactId,
+          version_number: vNum,
+          title:          processed.title,
+          canonical_type: processed.canonical_type,
+          surface:        processed.surface,
+        });
+      }
+
+      return {
+        version_number:    vNum,
+        turn:              turnNumber,
+        // null when content could not be captured (browser_download fallback)
+        sidecar_filename:  processed.content !== null ? sidecarFilename : null,
+        content_hash:      processed.content_hash,
+        char_count:        processed.char_count,
+        line_count:        processed.line_count,
+        // byte_count is set for binary_fetch; expected_filename for browser_download
+        ...(processed.byte_count       != null && { byte_count:       processed.byte_count }),
+        ...(processed.expected_filename        && { expected_filename: processed.expected_filename }),
+        extraction_method: processed.extraction_method,
+        extracted_at:      new Date().toISOString(),
+        changed:           prevHash === null || processed.content_hash !== prevHash,
+        malformed:         processed.malformed,
+        type_unknown:      processed.type_unknown,
+        oversized:         processed.oversized,
+        supplementary:     processed.supplementary,
+      };
+    });
+
+    manifest.push({
+      artifact_id:    artifactId,
+      title:          first.title,
+      canonical_type: first.canonical_type,
+      extension:      first.extension,
+      version_count:  versions.length,
+      versions,
+    });
+  }
+
+  return { manifest, sidecarFiles };
 }

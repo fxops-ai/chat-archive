@@ -13,10 +13,28 @@ const SAFETY_LIMITS = {
   CLIPBOARD_READ_DELAY_MS: 100,         // Reduced from 175ms — saves ~4.5s on a 60-turn conversation
   SCROLL_STEP_DELAY_MS: 150,            // Reduced from 300ms — halves scroll phase duration
   HOVER_SETTLE_MS: 50,
+  // Artifact extraction — v0.3.0
+  MAX_ARTIFACT_PANELS: 50,
+  PANEL_OPEN_TIMEOUT_MS: 5_000,         // Waits 5-seconds to detect the panel after clicking the artifact button
+  PANEL_CLOSE_DELAY_MS: 100,
+  MAX_ARTIFACT_CONTENT_SIZE: 500_000,
+  // Binary artifact extraction — v0.4.0
+  BINARY_INTERCEPT_TIMEOUT_MS: 5_000,   // max wait for background to relay intercepted URL
+  BINARY_FETCH_MAX_SIZE: 50_000_000,    // 50MB hard cap on binary fetch (PPTX/DOCX/XLSX)
 };
 
-const SCHEMA_VERSION = '1.0';
-const EXTENSION_VERSION = '0.2.2';     // Bumped from 0.2.1
+const SCHEMA_VERSION = '1.1';           // Bumped from 1.0 in v0.3.0
+const EXTENSION_VERSION = '0.3.0';     // Bumped from 0.2.2
+
+// --- JSZip Integrity Pin — v0.3.0 ---
+// SHA-256 of src/vendor/jszip.min.js v3.10.1, verified at build time by build.sh.
+// Not checked at runtime (file is local, not fetched).
+// Update procedure: replace jszip.min.js → shasum -a 256 → update sha256 here → rebuild.
+const JSZIP_INTEGRITY = {
+  filename: 'jszip.min.js',
+  sha256: 'acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e',
+  version: '3.10.1',
+};
 
 // --- Platform Detection ---
 function detectPlatform() {
@@ -189,4 +207,67 @@ function flagIfOversized(turn) {
     turn.flagReason = 'Content exceeds 100KB';
   }
   return turn;
+}
+
+// --- Artifact Utilities — v0.3.0 ---
+
+/**
+ * Poll for an element matching selector until found or timeoutMs elapses.
+ * Resolves with the element; rejects with an Error on timeout.
+ *
+ * Used by artifact-panel.js to wait for the artifact panel to render before
+ * attempting content extraction.
+ */
+function waitForElement(selector, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(selector);
+    if (existing) {
+      resolve(existing);
+      return;
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    const interval = setInterval(() => {
+      const el = document.querySelector(selector);
+      if (el) {
+        clearInterval(interval);
+        resolve(el);
+      } else if (Date.now() >= deadline) {
+        clearInterval(interval);
+        reject(
+          new Error(
+            `[Chat Archive] waitForElement: "${selector}" not found within ${timeoutMs}ms`
+          )
+        );
+      }
+    }, 50);
+  });
+}
+
+/**
+ * Compute SHA-256 of a UTF-8 string, returning lowercase hex.
+ *
+ * Used by artifact-code.js to produce content_hash for each artifact version,
+ * which drives deduplication and the `changed` flag in the manifest.
+ */
+async function computeSHA256(str) {
+  const data = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Compute SHA-256 of a Uint8Array (binary content), returning lowercase hex.
+ * Used by artifact-code.js for binary artifact version deduplication.
+ *
+ * @param {Uint8Array} uint8Array - Binary content
+ * @returns {Promise<string>} - Lowercase hex SHA-256
+ */
+async function computeSHA256Binary(uint8Array) {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', uint8Array);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }

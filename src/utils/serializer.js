@@ -53,7 +53,13 @@ function serializeToJSON(extraction, platform) {
       partial_export: extraction.partial || false,
       extraction_errors: extraction.errors || [],
       integrity_warnings: integrityWarnings,
+      has_artifacts:  (extraction.artifactManifest || []).length > 0,
+      artifact_count: (extraction.artifactManifest || []).length,
+      ...((extraction.artifactManifest || []).length > 0 && {
+        zip_filename: generateFilename(platform, 'zip'),
+      }),
     },
+    artifact_manifest: extraction.artifactManifest || [],
     conversation: extraction.turns.map((turn, index) => ({
       turn: index + 1,
       role: turn.role,
@@ -63,6 +69,7 @@ function serializeToJSON(extraction, platform) {
       extraction_method: turn.extractionMethod || 'direct',
       ...(turn.timestamp && { timestamp: turn.timestamp }),
       ...(turn.flagged && { flagged: true, flag_reason: turn.flagReason }),
+      artifacts: turn.artifacts || [],
     })),
   };
 
@@ -70,6 +77,8 @@ function serializeToJSON(extraction, platform) {
     json: JSON.stringify(exportData, null, 2),
     metadata: exportData.export_metadata,
     integrityWarnings,
+    artifactManifest: extraction.artifactManifest || [],
+    sidecarFiles:     extraction.sidecarFiles     || [],
   };
 }
 
@@ -85,6 +94,27 @@ function serializeToMarkdown(extraction, platform) {
   const integrityWarnings = runIntegrityChecks(extraction.turns);
   const exportTimestamp = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   const platformName = platformToDisplayName(platform);
+
+  // Build sidecar content lookup: sidecar_filename → content string.
+  // Binary sidecars (Uint8Array, from binary_fetch) are excluded — rendering
+  // binary bytes as Markdown text is meaningless, and their manifest entries
+  // are handled by the non-code else branch below.
+  const sidecarContentMap = new Map(
+    (extraction.sidecarFiles || [])
+      .filter(f => typeof f.content === 'string')
+      .map(f => [f.filename, f.content])
+  );
+  // Build manifest lookup: `${artifact_id}|${version_number}` → version object
+  const manifestVersionMap = new Map();
+  for (const entry of (extraction.artifactManifest || [])) {
+    for (const v of entry.versions) {
+      manifestVersionMap.set(`${entry.artifact_id}|${v.version_number}`, {
+        ...v,
+        version_count: entry.version_count,
+        canonical_type: entry.canonical_type,
+      });
+    }
+  }
 
   const lines = [];
 
@@ -119,6 +149,51 @@ function serializeToMarkdown(extraction, platform) {
       lines.push(`\n> ⚠️ *Flagged: ${turn.flagReason || 'Unknown reason'}*`);
     }
 
+    // Artifact blocks
+    const CODE_TYPES = new Set([
+      'shell', 'python', 'javascript', 'typescript', 'jsx', 'tsx',
+      'css', 'json', 'yaml', 'sql', 'markdown', 'text',
+      'c', 'cpp', 'rust', 'go', 'java', 'kotlin', 'swift',
+      'ruby', 'php', 'r', 'dockerfile', 'makefile', 'terraform', 'powershell',
+    ]);
+
+    for (const ref of (turn.artifacts || [])) {
+      const versionData = manifestVersionMap.get(`${ref.artifact_id}|${ref.version_number}`);
+      if (!versionData) continue;
+
+      const { canonical_type, version_number, version_count, sidecar_filename } = versionData;
+      const title = ref.title;
+
+      lines.push('');
+      lines.push(`### Artifact: ${title}`);
+      // sidecar_filename is null for browser_download artifacts — show expected filename instead
+      const fileRef = sidecar_filename
+        ? ` | **File:** \`${sidecar_filename}\``
+        : (versionData.expected_filename
+            ? ` | **Expected:** \`${versionData.expected_filename}\``
+            : '');
+      lines.push(`**Type:** ${canonical_type} | **Version:** ${version_number} of ${version_count}${fileRef}`);
+
+      if (CODE_TYPES.has(canonical_type)) {
+        const content = sidecarContentMap.get(sidecar_filename) || '';
+        lines.push('');
+        lines.push('```' + canonical_type);
+        lines.push(escapeHtmlForMarkdown(content));
+        lines.push('```');
+      } else {
+        // Non-code types: SVG, HTML, and binary formats (PPTX, DOCX, XLSX).
+        // Content lives in the sidecar file rather than inline in Markdown.
+        if (versionData.extraction_method === 'browser_download') {
+          lines.push(
+            `*Binary artifact downloaded to your Downloads folder — ` +
+            `see \`binary-downloads-readme.txt\` for instructions.*`
+          );
+        } else {
+          lines.push('*Content saved to sidecar file in zip archive.*');
+        }
+      }
+    }
+
     lines.push('\n---\n');
   }
 
@@ -141,6 +216,8 @@ function serializeToMarkdown(extraction, platform) {
     markdown: lines.join('\n'),
     metadata,
     integrityWarnings,
+    artifactManifest: extraction.artifactManifest || [],
+    sidecarFiles:     extraction.sidecarFiles     || [],
   };
 }
 

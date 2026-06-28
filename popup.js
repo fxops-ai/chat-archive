@@ -106,15 +106,24 @@ exportBtn.addEventListener('click', async () => {
 
     if (response && response.success) {
       const meta = response.metadata || {};
-      const formatLabel =
-        meta.formats_exported?.join(' + ').toUpperCase() ||
-        selectedFormat.toUpperCase();
-      showStatus(
-        'success',
-        `Exported ${meta.total_turns || '?'} turns as ${formatLabel} from ${
-          PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform
-        }.`
-      );
+      if (meta.artifact_count > 0) {
+        showStatus(
+          'success',
+          `Exported ${meta.total_turns || '?'} turns and ${meta.artifact_count} artifact(s) from ${
+            PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform
+          }. Saved as zip.`
+        );
+      } else {
+        const formatLabel =
+          meta.formats_exported?.join(' + ').toUpperCase() ||
+          selectedFormat.toUpperCase();
+        showStatus(
+          'success',
+          `Exported ${meta.total_turns || '?'} turns as ${formatLabel} from ${
+            PLATFORM_DISPLAY[detectedPlatform] || detectedPlatform
+          }.`
+        );
+      }
       showResults(meta, response.integrityWarnings);
     } else {
       showStatus('error', response?.error || 'Export failed.');
