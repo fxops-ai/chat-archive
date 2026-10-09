@@ -10,6 +10,18 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUT="$SCRIPT_DIR/content.js"
 
+# Verify JSZip integrity before building — catches accidental file replacement or corruption.
+# Update JSZIP_EXPECTED here (and in src/utils/constants.js) whenever JSZip is upgraded.
+JSZIP_EXPECTED="acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"
+JSZIP_ACTUAL=$(shasum -a 256 "$SCRIPT_DIR/src/vendor/jszip.min.js" | awk '{print $1}')
+if [ "$JSZIP_ACTUAL" != "$JSZIP_EXPECTED" ]; then
+  echo "ERROR: jszip.min.js SHA-256 mismatch"
+  echo "  Expected: $JSZIP_EXPECTED"
+  echo "  Actual:   $JSZIP_ACTUAL"
+  exit 1
+fi
+echo "JSZip integrity: OK"
+
 echo "Building Chat Archive content script (Phase 2)..."
 
 cat > "$OUT" << 'BANNER'
@@ -30,15 +42,22 @@ cat > "$OUT" << 'BANNER'
 BANNER
 
 # Concatenate in dependency order:
-# 1. Constants & shared utilities (no deps)
-# 2. Platform extractors (depend on constants)
-# 3. Heuristics (depends on constants)
-# 4. Serializer (depends on constants)
-# 5. File writer (depends on constants)
-# 6. Content script orchestrator (depends on everything above)
+# 1. JSZip vendor library (no deps — must come first; defines JSZip global)
+# 2. Constants & shared utilities (no deps)
+# 3. Artifact modules (depend on constants)
+# 4. Platform extractors (depend on constants + artifact modules)
+# 5. Heuristics (depends on constants)
+# 6. Serializer (depends on constants)
+# 7. File writer (depends on constants; downloadZip depends on JSZip)
+# 8. Content script orchestrator (depends on everything above)
 
 FILES=(
+  "src/vendor/jszip.min.js"
   "src/utils/constants.js"
+  "src/extractors/artifacts/artifact-types.js"
+  "src/extractors/artifacts/artifact-code.js"
+  "src/extractors/artifacts/artifact-panel.js"
+  "src/extractors/artifacts/artifact-detector.js"
   "src/extractors/claude.js"
   "src/extractors/chatgpt.js"
   "src/extractors/gemini.js"
@@ -72,5 +91,11 @@ echo ""
 echo "Built: $OUT"
 echo "  Size: $BYTES bytes, $LINES lines"
 echo "  Files: ${#FILES[@]} source files"
+echo ""
+echo "Verifying key symbols..."
+for symbol in "JSZip" "scrollToLoadAll" "artifact-block-cell" "data-skill-file-viewer" "slugify"; do
+  count=$(grep -c "$symbol" "$OUT" 2>/dev/null || echo 0)
+  echo "  $symbol: $count occurrence(s)"
+done
 echo ""
 echo "To load: chrome://extensions → Load unpacked → select $(dirname "$OUT")"
