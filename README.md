@@ -2,7 +2,7 @@
 
 **Export AI chat conversations to durable JSON and Markdown formats.**
 
-A Chrome browser extension that extracts conversations from AI chat platforms (Claude.ai, ChatGPT, Gemini, Grok) into portable, machine-readable files. Zero network requests. Zero telemetry. Your conversations never leave your browser.
+A Chrome browser extension that extracts conversations from AI chat platforms (Claude.ai, ChatGPT, Gemini, Grok) into portable, machine-readable files. Conversations never leave your browser. The only network request is an optional plugin update check against this GitHub repository.
 
 ---
 
@@ -12,7 +12,8 @@ A Chrome browser extension that extracts conversations from AI chat platforms (C
 - **Two Export Formats**: JSON (canonical, schema v1.1) and Markdown with metadata
 - **Smart Extraction**: Three-pass strategy (clipboard → heuristics → ML fallback)
 - **Artifact Extraction**: Full extraction of Claude.ai artifacts — code, HTML, SVG, and binary files (PPTX, DOCX, XLSX)
-- **Privacy First**: All processing happens in-browser. No data sent to external servers.
+- **Privacy First**: Conversation processing stays in the browser. Nothing from a chat is sent out.
+- **Plugin updates**: Check for updates from the popup. A newer version is written into the loaded extension folder and the plugin reloads, without uninstalling it.
 - **Safety Guarantees**: Hard limits (500 turns, 60s timeout), integrity checks, circuit breakers
 - **Cross-Platform**: Works on Windows, macOS, Linux (any Chromium browser)
 
@@ -52,6 +53,8 @@ A Chrome browser extension that extracts conversations from AI chat platforms (C
 5. **Choose where to save** the file
 
    If the conversation contains artifacts, a `.zip` file is created containing the JSON/Markdown plus all artifact sidecar files.
+
+6. **To install a newer version**, open the popup and click **Check for updates**. When one is available, **Update plugin** asks for the folder you loaded in `chrome://extensions`, writes the new files there, and reloads the extension. You do not uninstall it. The first install of this update flow still uses Load unpacked.
 
 Your conversation is now a durable, addressable artifact. Use it as:
 - Input to scripts or automation
@@ -130,12 +133,12 @@ chat-export-claude-2026-06-28/
 ## 🔒 Security & Privacy
 
 ### Core Guarantee
-**Chat Archive makes zero network requests.** Conversations never leave your browser.
+**Conversations never leave your browser.** Exporting a chat does not contact any server.
 
 - ✅ No telemetry, analytics, or crash reporting
-- ✅ No external API calls
-- ✅ No background service that phones home
-- ✅ All processing happens locally in the browser tab
+- ✅ No conversation content in any request
+- ✅ The only network call is the plugin update check, and only to this GitHub repository
+- ✅ All extraction happens locally in the browser tab
 
 ### Permissions Explained
 
@@ -145,7 +148,8 @@ chat-export-claude-2026-06-28/
 | `downloads` | Write export files to your device | Low |
 | `storage` | Cache user classification corrections | Low |
 | `clipboardRead` | Read clipboard after programmatic copy-button click | Low |
-| Host permissions (6 domains) | Inject content script on chat platforms | Scoped |
+| Host permissions (chat sites) | Inject content script on chat platforms | Scoped |
+| Host permissions (GitHub) | Read the latest version and download the extension archive when you update | Low |
 
 ### Safety Limits (Circuit Breakers)
 
@@ -216,15 +220,17 @@ grep -n "scrollToLoadAll" content.js
 
 ```
 chat-archive/
-├── manifest.json           # Chrome extension manifest (v0.4.0)
+├── manifest.json           # Chrome extension manifest (v0.5.0)
 ├── background.js           # Service worker — downloads + binary interception
 ├── popup.html/js           # Extension popup UI
+├── update.html/js          # Check GitHub and install a newer unpacked build
 ├── content.js              # Built file (concatenated from src/)
 ├── build.sh                # Build script
 ├── src/
 │   ├── content.js          # Main orchestrator
 │   ├── utils/
 │   │   ├── constants.js    # Safety limits, shared DOM utilities, platform detection
+│   │   ├── update-check.js # Version compare and GitHub update URLs
 │   │   ├── serializer.js   # JSON/MD export formatting
 │   │   └── filewriter.js   # Download + zip via Chrome API
 │   └── extractors/

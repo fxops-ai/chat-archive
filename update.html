@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Update Chat Archive</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 15px;
+      color: #1a1a1a;
+      background: #f6f6f6;
+      padding: 32px 16px 48px;
+    }
+
+    .card {
+      max-width: 440px;
+      margin: 0 auto;
+      background: #fff;
+      border: 1px solid #e5e5e5;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+    }
+
+    .header p {
+      margin-top: 6px;
+      font-size: 13px;
+      line-height: 1.45;
+      color: #555;
+    }
+
+    .content { padding: 20px; }
+
+    .versions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .version {
+      padding: 10px 12px;
+      background: #fafafa;
+      border-radius: 8px;
+    }
+
+    .version .label {
+      display: block;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 2px;
+    }
+
+    .version .value { font-weight: 600; }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .status.info { background: #f0f4ff; color: #3b5998; }
+    .status.success { background: #f0faf0; color: #2d7a3a; }
+    .status.error { background: #fff0f0; color: #c53030; }
+    .status.warning { background: #fffbf0; color: #b45309; }
+
+    .folder {
+      font-size: 12px;
+      line-height: 1.45;
+      color: #666;
+      margin-bottom: 14px;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #1a1a1a; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #333; }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .btn-secondary {
+      flex: 1;
+      background: #fff;
+      color: #333;
+      border: 1px solid #ddd;
+    }
+
+    .btn-secondary:hover:not(:disabled) { border-color: #999; }
+
+    .note {
+      margin-top: 14px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #777;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>Update Chat Archive</h1>
+      <p>Installs the latest version into the folder you loaded at chrome://extensions, then reloads the plugin. You do not uninstall it.</p>
+    </div>
+    <div class="content">
+      <div class="versions">
+        <div class="version">
+          <span class="label">Installed</span>
+          <span id="currentVersion" class="value">…</span>
+        </div>
+        <div class="version">
+          <span class="label">Latest on GitHub</span>
+          <span id="latestVersion" class="value">Checking…</span>
+        </div>
+      </div>
+
+      <div id="status" class="status info" role="status">Checking for an update…</div>
+      <p id="folderStatus" class="folder">Looking for a saved extension folder…</p>
+
+      <button id="updateBtn" class="btn btn-primary" type="button" disabled>Update plugin</button>
+      <div class="row">
+        <button id="chooseBtn" class="btn btn-secondary" type="button">Choose folder</button>
+        <button id="checkBtn" class="btn btn-secondary" type="button">Check again</button>
+      </div>
+
+      <p class="note">The first update asks for the Chat Archive folder. Later updates reuse it. Files from GitHub replace the extension files in that folder. A .git directory in the folder is left alone. Conversations are not uploaded.</p>
+    </div>
+  </div>
+
+  <script src="src/vendor/jszip.min.js"></script>
+  <script src="src/utils/update-check.js"></script>
+  <script src="update.js"></script>
+</body>
+</html>
