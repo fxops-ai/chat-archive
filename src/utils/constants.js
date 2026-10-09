@@ -24,7 +24,7 @@ const SAFETY_LIMITS = {
 };
 
 const SCHEMA_VERSION = '1.1';           // Bumped from 1.0 in v0.3.0
-const EXTENSION_VERSION = '0.3.0';     // Bumped from 0.2.2
+const EXTENSION_VERSION = '0.4.0';     // Bumped from 0.3.0
 
 // --- JSZip Integrity Pin — v0.3.0 ---
 // SHA-256 of src/vendor/jszip.min.js v3.10.1, verified at build time by build.sh.

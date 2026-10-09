@@ -2,8 +2,19 @@
 // Chat Archive — Claude.ai Extractor (Pass 0 + Direct Text Fallback)
 // =============================================================================
 // Architecture: Appendix C
-// Turn container: div[data-test-render-count] wraps user+assistant pair
-// Copy buttons: button[data-testid="action-bar-copy"] on both roles
+//
+// Turn containers (either layout):
+//   Current (Oct 2026): [data-testid="transcript-row"] — one row per message
+//     human rows:    data-perf-row="human" + [data-testid="user-message"]
+//     assistant rows: data-perf-row="assistant" + [data-testid="assistant-message"]
+//   Legacy: [data-test-render-count] — one element wraps a user+assistant pair
+//
+// Scroll container:
+//   Current: [data-autoscroll-container="true"] (class overflow-y-auto, not overflow-y-scroll)
+//   Legacy:  .overflow-y-scroll.overflow-x-hidden.pt-6.flex-1
+//
+// Copy buttons: button[aria-label="Copy"]
+//   Legacy also used button[data-testid="action-bar-copy"]
 // Role signals: [data-testid="user-message"] (user), [data-is-streaming] (assistant)
 
 async function extractClaudeConversation() {
@@ -19,11 +30,19 @@ async function extractClaudeConversation() {
     return { turns: [], errors: ['Scroll container not found'], partial: true };
   }
 
-  // 2. Load all turns via scrolling
-  await scrollToLoadAll(scrollContainer, '[data-test-render-count]', startTime);
+  // Current Claude renders one transcript row per message. The legacy layout
+  // wrapped each user+assistant pair in [data-test-render-count]. The extract
+  // loop below asks each container for both roles, so a single-message row
+  // simply yields one turn.
+  const turnSelector = document.querySelector('[data-testid="transcript-row"]')
+    ? '[data-testid="transcript-row"]'
+    : '[data-test-render-count]';
 
-  // 3. Get turn pair containers
-  const turnContainers = document.querySelectorAll('[data-test-render-count]');
+  // 2. Load all turns via scrolling
+  await scrollToLoadAll(scrollContainer, turnSelector, startTime);
+
+  // 3. Get turn containers
+  const turnContainers = document.querySelectorAll(turnSelector);
   console.log(`[Chat Archive] Claude: Found ${turnContainers.length} turn containers`);
 
   if (turnContainers.length === 0) {
@@ -153,10 +172,19 @@ async function extractClaudeTurn(container, role, hasClipboard) {
       groupContainer.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
       await wait(SAFETY_LIMITS.HOVER_SETTLE_MS);
 
-      // Find copy button within this turn's group
-      // Claude uses data-testid="action-bar-copy" — but each turn-pair has multiple
-      // We need the copy button closest to our role element
-      const copyButton = findClaudeCopyButton(groupContainer, container, role);
+      // Find copy button within this turn's group.
+      // Current Claude: button[aria-label="Copy"]. Off-screen user rows often
+      // omit the toolbar until "Show message actions" is activated.
+      // Legacy: button[data-testid="action-bar-copy"], two per pair.
+      let copyButton = findClaudeCopyButton(groupContainer, container, role);
+      if (!copyButton) {
+        const reveal = container.querySelector('button[aria-label^="Show message actions"]');
+        if (reveal) {
+          reveal.click();
+          await wait(150);
+          copyButton = findClaudeCopyButton(groupContainer, container, role);
+        }
+      }
 
       if (copyButton) {
         const clipboardContent = await clickCopyAndRead(copyButton);
@@ -180,9 +208,12 @@ async function extractClaudeTurn(container, role, hasClipboard) {
 
   if (!content || content.trim().length === 0) return null;
 
-  // Timestamp
-  const timestampEl = container.querySelector('span.text-text-500.text-xs');
-  const timestamp = timestampEl?.textContent?.trim() || undefined;
+  // Timestamp. Current Claude uses <time datetime="...">. Legacy used a styled span.
+  const timestampEl = container.querySelector('time[datetime]')
+    || container.querySelector('span.text-text-500.text-xs');
+  const timestamp = timestampEl?.getAttribute?.('datetime')
+    || timestampEl?.textContent?.trim()
+    || undefined;
 
   return {
     role,
@@ -200,16 +231,23 @@ async function extractClaudeTurn(container, role, hasClipboard) {
  * each with their own action bar and copy button.
  */
 function findClaudeCopyButton(groupContainer, pairContainer, role) {
-  // Try within the immediate group first
-  let btn = groupContainer.querySelector('button[data-testid="action-bar-copy"]');
+  // Current transcript rows: aria-label="Copy" (no data-testid).
+  // Exact match avoids "Copy to clipboard" on inline code blocks.
+  let btn = groupContainer.querySelector('button[aria-label="Copy"]');
+  if (btn) return btn;
+
+  // Legacy action bar.
+  btn = groupContainer.querySelector('button[data-testid="action-bar-copy"]');
   if (btn) return btn;
 
   btn = findActionButton(groupContainer, ['Copy']);
   if (btn) return btn;
 
-  // If group didn't have it, search all copy buttons in the pair container
-  // and match by proximity to the role element
-  const allCopyBtns = pairContainer.querySelectorAll('button[data-testid="action-bar-copy"]');
+  // If the group didn't have it, search the whole turn container.
+  // Legacy pairs have one action-bar-copy per role; pick by position.
+  const allCopyBtns = pairContainer.querySelectorAll(
+    'button[aria-label="Copy"], button[data-testid="action-bar-copy"]'
+  );
   if (allCopyBtns.length === 0) return null;
 
   if (allCopyBtns.length === 1) return allCopyBtns[0];
@@ -229,34 +267,48 @@ function extractClaudeDirectText(container, role) {
   if (role === 'user') {
     const el = container.querySelector('[data-testid="user-message"]');
     return el?.textContent?.trim() || '';
-  } else {
-    // Prefer .standard-markdown within .font-claude-response
-    const markdown = container.querySelector('.font-claude-response .standard-markdown');
-    if (markdown) return markdown.textContent?.trim() || '';
-
-    const response = container.querySelector('.font-claude-response');
-    if (response) return response.textContent?.trim() || '';
-
-    const streaming = container.querySelector('[data-is-streaming]');
-    return streaming?.textContent?.trim() || '';
   }
+
+  // Reply prose only. A single assistant row can contain several blocks
+  // (text, then a tool row, then more text). [data-is-streaming] also wraps
+  // tool-status chrome and the action bar, so it is the last resort.
+  // querySelectorAll returns each element once even if it matches both selectors.
+  const blocks = container.querySelectorAll('[data-perf-reply-text], .standard-markdown');
+  if (blocks.length > 0) {
+    return Array.from(blocks)
+      .map((el) => el.textContent?.trim() || '')
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  const response = container.querySelector('.font-claude-response');
+  if (response) return response.textContent?.trim() || '';
+
+  const streaming = container.querySelector('[data-testid="assistant-message"], [data-is-streaming]');
+  return streaming?.textContent?.trim() || '';
 }
 
 /**
  * Find Claude's scrollable chat container.
  */
 function findClaudeScrollContainer() {
+  const turnInside = '[data-testid="transcript-row"], [data-test-render-count]';
   const strategies = [
+    // Current Claude: stable hook on the transcript scroller (overflow-y-auto).
+    () => document.querySelector('[data-autoscroll-container="true"]'),
+    // Legacy class combo from the paired-turn layout (overflow-y-scroll).
     () => document.querySelector('.overflow-y-scroll.overflow-x-hidden.pt-6.flex-1'),
     () => {
-      const scrollables = document.querySelectorAll('[class*="overflow-y-scroll"]');
+      const scrollables = document.querySelectorAll(
+        '[class*="overflow-y-auto"], [class*="overflow-y-scroll"]'
+      );
       for (const el of scrollables) {
-        if (el.querySelector('[data-test-render-count]')) return el;
+        if (el.querySelector(turnInside)) return el;
       }
       return null;
     },
     () => {
-      const firstTurn = document.querySelector('[data-test-render-count]');
+      const firstTurn = document.querySelector(turnInside);
       return firstTurn ? findScrollableAncestor(firstTurn) : null;
     },
   ];
