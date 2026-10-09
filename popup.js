@@ -204,4 +204,25 @@ function sendToTab(tabId, message) {
   });
 }
 
+function openUpdatePage() {
+  chrome.runtime.openOptionsPage();
+}
+
+document.getElementById('checkUpdates').addEventListener('click', openUpdatePage);
+
+async function refreshUpdateNotice() {
+  const notice = document.getElementById('updateNotice');
+  try {
+    const latest = await getLatestVersion();
+    const current = readInstalledVersion();
+    if (!latest || !current || !isNewer(latest, current)) return;
+    notice.hidden = false;
+    notice.innerHTML = `Version ${escapeHtml(latest)} is available. <button type="button" class="text-btn" id="installUpdate">Update plugin</button>`;
+    document.getElementById('installUpdate').addEventListener('click', openUpdatePage);
+  } catch {
+    // A failed version check must not block export.
+  }
+}
+
 init();
+refreshUpdateNotice();
