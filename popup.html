@@ -127,6 +127,30 @@
     .footer .privacy { font-size: 10px; color: #999; }
     .footer .privacy .lock { font-size: 11px; }
 
+    .text-btn {
+      background: none;
+      border: none;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      font-weight: 600;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .update-link {
+      display: block;
+      margin-top: 4px;
+      background: none;
+      border: none;
+      padding: 0;
+      color: #888;
+      font: inherit;
+      font-size: 10px;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
     .spinner {
       display: inline-block;
       width: 14px;
@@ -153,6 +177,8 @@
       Detecting platform...
     </div>
 
+    <div id="updateNotice" class="status warning" hidden></div>
+
     <div class="format-group">
       <button class="format-btn active" data-format="json">JSON</button>
       <button class="format-btn" data-format="markdown">Markdown</button>
@@ -167,9 +193,11 @@
   </div>
 
   <div class="footer">
-    <div class="privacy"><span class="lock">🔒</span> No data leaves your browser</div>
+    <div class="privacy"><span class="lock">🔒</span> Conversations never leave your browser</div>
+    <button id="checkUpdates" class="update-link" type="button">Check for updates</button>
   </div>
 
+  <script src="src/utils/update-check.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
